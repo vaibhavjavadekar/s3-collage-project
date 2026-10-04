@@ -1,0 +1,149 @@
+---
+# 1. POSTGRES DATABASE
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: postgres }
+spec:
+  selector: { matchLabels: { app: postgres } }
+  template:
+    metadata: { labels: { app: postgres } }
+    spec:
+      containers:
+      - name: postgres
+        image: postgres:15-alpine
+        env:
+        - { name: POSTGRES_USER, value: postgres }
+        - { name: POSTGRES_PASSWORD, value: postgres }
+        - { name: POSTGRES_DB, value: filedb }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: postgres }
+spec:
+  type: LoadBalancer
+  selector: { app: postgres }
+  ports: [{ port: 5432, targetPort: 5432 }]
+
+---
+# 2. LOCALSTACK (S3)
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: localstack }
+spec:
+  selector: { matchLabels: { app: localstack } }
+  template:
+    metadata: { labels: { app: localstack } }
+    spec:
+      containers:
+      - name: localstack
+        image: localstack/localstack:3.5.0
+        env:
+        - { name: SERVICES, value: s3 }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: localstack }
+spec:
+  type: LoadBalancer # OrbStack will map this to localhost so your browser can upload files!
+  selector: { app: localstack }
+  ports: [{ port: 4566, targetPort: 4566 }]
+
+---
+# 3. METADATA SERVICE
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: metadata-service }
+spec:
+  selector: { matchLabels: { app: metadata-service } }
+  template:
+    metadata: { labels: { app: metadata-service } }
+    spec:
+      containers:
+      - name: metadata-service
+        image: metadata-svc:local
+        imagePullPolicy: Never # Tells K8s to use the local image we just built
+        env:
+        - { name: DATABASE_URL, value: "postgresql://postgres:postgres@postgres:5432/filedb" }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: metadata-service }
+spec:
+  selector: { app: metadata-service }
+  ports: [{ port: 5004 }]
+
+---
+# 4. DOWNLOAD SERVICE
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: download-service }
+spec:
+  selector: { matchLabels: { app: download-service } }
+  template:
+    metadata: { labels: { app: download-service } }
+    spec:
+      containers:
+      - name: download-service
+        image: download-svc:local
+        imagePullPolicy: Never
+        env:
+        - { name: AWS_ENDPOINT_URL, value: "http://localstack:4566" }
+        - { name: METADATA_SVC_URL, value: "http://metadata-service:5004" }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: download-service }
+spec:
+  selector: { app: download-service }
+  ports: [{ port: 5002 }]
+
+---
+# 5. UPLOAD SERVICE
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: upload-service }
+spec:
+  selector: { matchLabels: { app: upload-service } }
+  template:
+    metadata: { labels: { app: upload-service } }
+    spec:
+      containers:
+      - name: upload-service
+        image: upload-svc:local
+        imagePullPolicy: Never
+        env:
+        - { name: AWS_ENDPOINT_URL, value: "http://localstack:4566" }
+        - { name: METADATA_SVC_URL, value: "http://metadata-service:5004" }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: upload-service }
+spec:
+  type: LoadBalancer # Expose to your Mac so browser can request presigned URLs
+  selector: { app: upload-service }
+  ports: [{ port: 5001, targetPort: 5001 }]
+
+---
+# 6. UI SERVICE
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: ui-service }
+spec:
+  selector: { matchLabels: { app: ui-service } }
+  template:
+    metadata: { labels: { app: ui-service } }
+    spec:
+      containers:
+      - name: ui-service
+        image: ui-svc:local
+        imagePullPolicy: Never
+        env:
+        - { name: DOWNLOAD_SVC_URL, value: "http://download-service:5002" }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: ui-service }
+spec:
+  type: LoadBalancer # Expose to your Mac so you can see the website
+  selector: { app: ui-service }
+  ports: [{ port: 5003, targetPort: 5003 }]
